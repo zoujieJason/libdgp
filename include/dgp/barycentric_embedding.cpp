@@ -40,20 +40,20 @@ namespace dgp
 		solver.compute(LA.transpose() * LA);
 		if(solver.info() != Eigen::Success) 
 		{
-			std::cerr << "LeastSquareProblemSolver error: matrix decomposition failed." << std::endl;
+			std::cerr << "matrix decomposition failed." << std::endl;
 			return false;
 		}
 
 		const auto result = solver.solve(LA.transpose() * (-1.0 * LB * b));
 		if(solver.info() != Eigen::Success) 
 		{
-			std::cerr << "LeastSquareProblemSolver error: solving failed." << std::endl;
+			std::cerr << "solving failed." << std::endl;
 			return false;
 		}
 
         const auto number_of_vertices = V.rows();
 		UV.resize(number_of_vertices, 2);
-		for(size_t vid = 0; vid < number_of_vertices; ++vid) 
+		for(int vid = 0; vid < number_of_vertices; ++vid) 
 		{
 			if (is_boundary[vid])
 			{
