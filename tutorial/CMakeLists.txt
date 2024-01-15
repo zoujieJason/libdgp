@@ -4,6 +4,7 @@ option(LIBDGP_TUTORIALS_BIJECTIVE_PARAMETERIZATION "Compile libdgp tutorials bij
 option(LIBDGP_TUTORIALS_ARAP "Compile libdgp tutorials arap" ON)
 option(LIBDGP_TUTORIALS_LSCM "Compile libdgp tutorials lscm" ON)
 option(LIBDGP_TUTORIALS_MESH_TREE "Compile libdgp tutorials mesh_tree" ON)
+option(LIBDGP_TUTORIALS_KDTREE "Compile libdgp tutorials KDTree" ON)
 
 if(NOT TARGET igl::glfw)
     message(WARNING "Tutorial executables depend on OpenGL and glfw.")
@@ -31,4 +32,8 @@ endif()
 
 if(LIBDGP_TUTORIALS_MESH_TREE)
     dgp_add_tutorial(mesh_tree igl::core igl::glfw dgp)
+endif()
+
+if(LIBDGP_TUTORIALS_KDTREE)
+    dgp_add_tutorial(kdtree igl::core igl::glfw dgp)
 endif()
