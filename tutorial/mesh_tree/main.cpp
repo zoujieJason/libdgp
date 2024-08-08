@@ -13,6 +13,7 @@ int main(int argc, char **argv)
 
     dgp::MeshTree mesh_tree;
     mesh_tree.build(V.rows(), F);
+    // a mesh with more than one component
     for(auto head : mesh_tree)
     {
         mesh_tree.traverse(head, [](std::weak_ptr<dgp::MeshTree::Node> node)

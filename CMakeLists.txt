@@ -18,6 +18,7 @@ include(libdgp)
 
 # Enable the target of libigl
 igl_include(glfw)
+igl_include(imgui)
 
 if(LIBDGP_BUILD_TUTORIALS)
     add_subdirectory(tutorial)
