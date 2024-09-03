@@ -15,6 +15,7 @@ include(dgp_add_tutorial)
 
 include(libigl)
 include(libdgp)
+include(geometry-central)
 
 # Enable the target of libigl
 igl_include(glfw)
