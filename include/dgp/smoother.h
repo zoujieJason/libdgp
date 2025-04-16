@@ -18,6 +18,8 @@ namespace dgp
 			int fuzzy_kring{ 6 };
 			int block_kring{ 3 };
 			bool use_intrinsic{ false };
+			std::vector<size_t> remove_vertices; 
+			std::vector<size_t> block_vertices;
 		};
 
 		struct SDFParam
@@ -34,6 +36,7 @@ namespace dgp
 			double t{ 0.5 };
 			bool preserve_source_normals{ false };
 			int min_spacing_source_normals{ 4 };
+			std::vector<size_t> block_vertices;
 		};
 
 		struct DiffusionParam
@@ -41,6 +44,9 @@ namespace dgp
 			double lambda{ 0.5 };
 			double adjacent_point_potential{ 0.01 };
 			int min_spacing_constriants{ 3 };
+			std::vector<std::pair<size_t, double>> block_vertices;
+			std::vector<std::pair<size_t, double>> potential_vertices;
+			double lambda_regularization{0.1};
 		};
 
 		class SmootherImpl;
@@ -57,13 +63,13 @@ namespace dgp
 				const std::vector<double>& vbuffer,
 				const std::vector<int>& fbuffer,
 				const std::vector<int>& faces_label,
-				const PrecomputeParam &param = PrecomputeParam());
+				PrecomputeParam &param);
 			
 			void precompute(
 				const Eigen::MatrixXd &V, 
 				const Eigen::MatrixXi &F, 
 				const Eigen::VectorXi &faces_label,
-				const PrecomputeParam &param = PrecomputeParam());
+				PrecomputeParam &param);
 
 			void sdf_required(const SDFParam& param = SDFParam());
 
@@ -120,6 +126,10 @@ namespace dgp
 			bool scalar_field_solve(
 				size_t label,
 				const DiffusionParam& param = DiffusionParam());
+
+			bool local_optimize(
+				size_t label, 
+				const std::vector<size_t> &vertices);
 
 		private:
 			std::unique_ptr<SmootherImpl> impl_;

@@ -6,6 +6,8 @@ option(LIBDGP_TUTORIALS_LSCM                       "Compile libdgp tutorials lsc
 option(LIBDGP_TUTORIALS_MESH_TREE                  "Compile libdgp tutorials mesh_tree"                  OFF)
 option(LIBDGP_TUTORIALS_KDTREE                     "Compile libdgp tutorials kdtree"                     OFF)
 option(LIBDGP_TUTORIALS_CURVE_SMOOTHER             "Compile libdgp tutorials curve_smoother"             ON)
+option(LIBDGP_TUTORIALS_CURVE_SMOOTHER_LOCALLY     "Compile libdgp tutorials curve_smoother_locally"     ON)
+
 
 if(NOT TARGET igl::glfw)
     message(WARNING "Tutorial executables depend on OpenGL and glfw.")
@@ -41,4 +43,8 @@ endif()
 
 if(LIBDGP_TUTORIALS_CURVE_SMOOTHER)
     dgp_add_tutorial(curve_smoother igl::core igl::imgui igl::glfw dgp)
+endif()
+
+if(LIBDGP_TUTORIALS_CURVE_SMOOTHER)
+    dgp_add_tutorial(curve_smoother_locally igl::core igl::imgui igl::glfw dgp)
 endif()

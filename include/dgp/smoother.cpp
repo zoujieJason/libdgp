@@ -6,6 +6,7 @@
 
 #include <igl/boundary_loop.h>
 #include <igl/vertex_triangle_adjacency.h>
+#include <igl/triangle_triangle_adjacency.h>
 #include <igl/cr_vector_mass.h>
 #include <igl/cr_vector_laplacian.h>
 #include <igl/crouzeix_raviart_massmatrix.h>
@@ -19,8 +20,8 @@
 #include <igl/remesh_along_isoline.h>
 #include <igl/isolines.h>
 #include <igl/point_mesh_squared_distance.h>
-#include <igl/writeOBJ.h>
 #include <igl/facet_adjacency_matrix.h>
+#include <igl/sum.h>
 
 #include <unordered_map>
 
@@ -54,7 +55,7 @@ namespace dgp
 			std::vector<int> all_bVertices;
 			std::vector<std::vector<int>> all_bEdges;
 			Eigen::VectorXi faces_label;
-			Eigen::VectorXi vertices_label;
+			std::vector<Eigen::VectorX<bool>> vertices_label;
 			std::vector<std::vector<int> > VF, VFi;
 			Eigen::MatrixXi E, oE;
 			Eigen::MatrixXi Elist, EMAP;
@@ -89,10 +90,12 @@ namespace dgp
 			Eigen::MatrixXd SDFPD; 
 
 			void precompute(
+				const std::vector<size_t> &block_vertices,
 				const std::vector<std::vector<int>>& local_boundaries,
 				const std::vector<bool>& is_border_vertex,
 				int block_kring)
 			{
+				std::set<size_t> blocker(block_vertices.begin(), block_vertices.end());
 				const auto nE = E.maxCoeff() + 1;
 				Eigen::VectorXi edge_count = Eigen::VectorXi::Zero(nE);
 				Eigen::VectorXi vertex_count = Eigen::VectorXi::Zero(V.rows());
@@ -123,6 +126,10 @@ namespace dgp
 					for (int i = 0; i < boundary.size(); i++)
 					{
 						int inext = (i + 1) % boundary.size();
+						if (inext == 0) 
+						{
+							continue;
+						}
 						int vi = boundary[i];
 						int vj = boundary[inext];
 
@@ -139,9 +146,16 @@ namespace dgp
 							}
 						}
 
-						if (vertex_count(vi)++ < 1) all_bVertices.push_back(vi);
-						if (inext == 0) continue;
-						if (padding_vertex[i] || padding_vertex[inext]) continue;
+						vertex_count(vi)++;
+						if (padding_vertex[i] || padding_vertex[inext]) 
+						{
+							continue;
+						}
+						if (blocker.find(vi) != blocker.end())
+						{
+							continue; 
+						}
+
 						int eid = -1;
 						for (int f : VF[vi])
 						{
@@ -154,21 +168,27 @@ namespace dgp
 										if (F(f, k) != vi && F(f, k) != vj)
 										{ 
 											eid = E(f, k);
-											if (edge_count(eid)++ > 0) continue;
-											all_bEdges.push_back(std::vector<int>{f, k, vi, vj});
+											if (edge_count(eid)++ > 0) 
+											{
+												continue;
+											}
+											all_bEdges.push_back(std::vector<int>{f, k, vi, vj});			
+											all_bVertices.push_back(vi);
+											all_bVertices.push_back(vj);
 											break;
 										}
 									}
 								}
 							}
 							if (eid != -1) break;
-						}
-
-					}
+						} 
+					} 
 				}
+				std::sort(all_bVertices.begin(), all_bVertices.end()); 
+				all_bVertices.erase(std::unique(all_bVertices.begin(), all_bVertices.end()), all_bVertices.end());
 				BadVertex = vertex_count.unaryExpr([](int count) { return count > 1 ? 1 : 0; });
-				BadVertex += block;
-			}
+				BadVertex += block; 
+			} 
 
 			void precompute(bool use_intrinsic)
 			{
@@ -220,8 +240,6 @@ namespace dgp
 				igl::grad(V, F, Grad);
 				igl::doublearea(V, F, dblA);
 				Div = -0.25 * Grad.transpose() * dblA.colwise().replicate(3).asDiagonal();
-				
-				std::unordered_map<int, int> v_count;
 			}
 
 			Eigen::RowVector3d edge_basis(int i)
@@ -515,7 +533,8 @@ namespace dgp
 				std::vector<int> &edge_constraints,
 				std::vector<double> &paraVals,
 				std::vector<double> &perpVals,
-				int min_spacing_source_normals)
+				int min_spacing_source_normals,
+				const std::vector<size_t> &block_vertices)
 			{
 				if (!SDF_ready) return false;
 				edge_constraints.clear();
@@ -558,6 +577,9 @@ namespace dgp
 				igl::principal_curvature(V, F, PD1, PD2, PV1, PV2, bad_vertices);
 				std::for_each(bad_vertices.begin(), bad_vertices.end(), [&](int v) { BadVertex(v) += 1; });
 
+				Eigen::VectorXi Blocker = Eigen::VectorXi::Zero(BadVertex.size());
+				std::for_each(block_vertices.begin(), block_vertices.end(), [&](auto v){ Blocker(v) += 1; });
+
 				SDFD.setZero(V.rows(), 3);
 				SDFPD.setZero(V.rows(), 3);
 				std::vector<bool> is_sampled(all_bEdges.size(), false);
@@ -570,6 +592,11 @@ namespace dgp
 					if (BadVertex(vi) > 0 || BadVertex(vj) > 0)
 					{
 						is_sampled[i] = true; 
+						continue;
+					}
+					if (Blocker(vi) > 0 || Blocker(vj) > 0)
+					{
+						is_sampled[i] = false; 
 						continue;
 					}
 
@@ -693,7 +720,7 @@ namespace dgp
 				return true;
 			}
 
-			void solve_X(double t, bool preserve_source_normals, int min_spacing_source_normals)
+			void solve_X(const VectorTransportParam &param)
 			{
 				X_ready = false;
 				std::vector<int> edge_constraints; edge_constraints.reserve(all_bEdges.size());
@@ -703,7 +730,7 @@ namespace dgp
 				});
 				std::vector<double> paraVals = std::vector<double>(edge_constraints.size(), 0.08);
 				std::vector<double> perpVals = std::vector<double>(edge_constraints.size(), 0.98);
-				if (!sdf_boundary_condition(edge_constraints, paraVals, perpVals, min_spacing_source_normals))
+				if (!sdf_boundary_condition(edge_constraints, paraVals, perpVals, param.min_spacing_source_normals, param.block_vertices))
 				{
 					return;
 				}
@@ -712,7 +739,7 @@ namespace dgp
 				const int nE = E.maxCoeff() + 1; 
 				Eigen::VectorXi known;
 				Eigen::VectorXd knownVals;
-				if (preserve_source_normals)
+				if (param.preserve_source_normals)
 				{
 					known = Eigen::VectorXi::Zero(2 * edge_constraints.size());
 					knownVals = Eigen::VectorXd::Zero(2 * edge_constraints.size());
@@ -721,10 +748,10 @@ namespace dgp
 				Eigen::VectorXd Y0 = Eigen::VectorXd::Zero(2 * nE), Yt;
 				for (int i = 0; i < edge_constraints.size(); ++i)
 				{
-					if (preserve_source_normals) known(i) = edge_constraints[i];
-					if (preserve_source_normals) known(i + edge_constraints.size()) = edge_constraints[i] + nE;
-					if (preserve_source_normals) knownVals(i) = paraVals[i];
-					if (preserve_source_normals) knownVals(i + edge_constraints.size()) = perpVals[i];
+					if (param.preserve_source_normals) known(i) = edge_constraints[i];
+					if (param.preserve_source_normals) known(i + edge_constraints.size()) = edge_constraints[i] + nE;
+					if (param.preserve_source_normals) knownVals(i) = paraVals[i];
+					if (param.preserve_source_normals) knownVals(i + edge_constraints.size()) = perpVals[i];
 					Y0(edge_constraints[i]) = paraVals[i];
 					Y0(edge_constraints[i] + nE) = perpVals[i];
 				}
@@ -732,12 +759,12 @@ namespace dgp
 				Eigen::SparseMatrix<double> Aeq;
 				Eigen::VectorXd Beq;
 				X_ready &= igl::min_quad_with_fixed
-				(Eigen::SparseMatrix<double>(vecM + t * vecL), Eigen::VectorXd(-vecM * Y0), known, knownVals,
+				(Eigen::SparseMatrix<double>(vecM + param.t * vecL), Eigen::VectorXd(-vecM * Y0), known, knownVals,
 					Aeq, Beq, false, Yt);
 
 				Eigen::VectorXi knownScal;
 				Eigen::VectorXd knownScalVals;
-				if (preserve_source_normals)
+				if (param.preserve_source_normals)
 				{
 					knownScal = Eigen::VectorXi::Zero(edge_constraints.size());
 					knownScalVals = Eigen::VectorXd::Zero(edge_constraints.size());
@@ -747,16 +774,16 @@ namespace dgp
 				for (int i = 0; i < edge_constraints.size(); ++i)
 				{
 					u0(edge_constraints[i]) = sqrt(paraVals[i] * paraVals[i] + perpVals[i] * perpVals[i]);
-					if (preserve_source_normals) knownScal(i) = edge_constraints[i];
-					if (preserve_source_normals) knownScalVals(i) = u0(edge_constraints[i]);
+					if (param.preserve_source_normals) knownScal(i) = edge_constraints[i];
+					if (param.preserve_source_normals) knownScalVals(i) = u0(edge_constraints[i]);
 				}
 
 				X_ready &= igl::min_quad_with_fixed
-				(Eigen::SparseMatrix<double>(scalarM + t * scalarL), Eigen::VectorXd(-scalarM * u0), knownScal,
+				(Eigen::SparseMatrix<double>(scalarM + param.t * scalarL), Eigen::VectorXd(-scalarM * u0), knownScal,
 					knownScalVals, Aeq, Beq, false, ut);
 
 				Eigen::VectorXd knownScalValsPhi;
-				if (preserve_source_normals)
+				if (param.preserve_source_normals)
 				{
 					knownScalValsPhi = Eigen::VectorXd::Zero(edge_constraints.size());
 				}
@@ -765,11 +792,11 @@ namespace dgp
 				for (int i = 0; i < edge_constraints.size(); ++i)
 				{
 					phi0(edge_constraints[i]) = 1;
-					if (preserve_source_normals) knownScalValsPhi(i) = 1;
+					if (param.preserve_source_normals) knownScalValsPhi(i) = 1;
 				}
 
 				X_ready &= igl::min_quad_with_fixed
-				(Eigen::SparseMatrix<double>(scalarM + t * scalarL), Eigen::VectorXd(-scalarM * phi0), knownScal,
+				(Eigen::SparseMatrix<double>(scalarM + param.t * scalarL), Eigen::VectorXd(-scalarM * phi0), knownScal,
 					knownScalValsPhi, Aeq, Beq, false, phit);
 
 				Eigen::ArrayXd Xtfactor = ut.array() /
@@ -779,7 +806,6 @@ namespace dgp
 				Xt.segment(0, nE) = Xtfactor * Yt.segment(0, nE).array();
 				Xt.segment(nE, nE) = Xtfactor * Yt.segment(nE, nE).array();
 
-				//Convert vector field for plotting
 				Eigen::MatrixXd vecs(nE, 3);
 				for (int i = 0; i < edgeMps.rows(); ++i)
 				{
@@ -798,25 +824,35 @@ namespace dgp
 				X.rowwise().normalize();
 			}
 
-			void solve_PHI(double lambda, double adjacent_point_potential, int skip)
+			void solve_PHI(const DiffusionParam& param)
 			{
 				PHI_ready = false;
 				if (!X_ready) return;
 
-				std::vector<int> constraints;
+				std::set<size_t> blocker;
+				std::for_each(param.block_vertices.begin(), param.block_vertices.end(), [&blocker](auto pair){ blocker.insert(pair.first); });
+
+				std::vector<std::pair<int, double> > constraints;
+				constraints.reserve(all_bVertices.size() + param.potential_vertices.size()); 
 				for (int i = 0; i < all_bVertices.size(); i++)
 				{
-					if (i % skip == 0 && !BadVertex(all_bVertices[i]))
+					if (i % param.min_spacing_constriants == 0 &&
+						!BadVertex(all_bVertices[i]) && 
+						blocker.find(all_bVertices[i]) == blocker.end())
 					{
-						constraints.push_back(all_bVertices[i]);
+						auto vertex = all_bVertices[i];
+						auto vertex_label = vertices_label[vertex];
+						vertex_label(0) = false; 
+						constraints.emplace_back(std::make_pair(vertex, vertex_label.count() > 1? param.adjacent_point_potential: 0.));
 					}
 				}
+				constraints.insert(constraints.end(), param.potential_vertices.begin(), param.potential_vertices.end());
 
 				std::vector<Eigen::Triplet<double>> triplets;
 				triplets.reserve(constraints.size());
 				for (int i = 0; i < constraints.size(); i++)
 				{
-					triplets.emplace_back(i, constraints[i], 1.);
+					triplets.emplace_back(i, constraints[i].first, 1.);
 				}
 
 				Eigen::SparseMatrix<double> B(constraints.size(), V.rows());
@@ -824,7 +860,33 @@ namespace dgp
 				Eigen::SparseMatrix<double> Bt = B.transpose();
 				Eigen::SparseMatrix<double> BtB = Bt * B;
 
-				Eigen::SimplicialLLT< Eigen::SparseMatrix<double> > solver(LtL + lambda * BtB);
+				Eigen::MatrixXd Dense_uL = Eigen::MatrixXd::Zero(V.rows(), V.rows());
+				for(auto block_vertex: param.block_vertices)
+				{
+					auto v = block_vertex.first;
+					auto nvf = VF[v].size(); 
+					for(int i = 0; i < nvf; ++i)
+					{
+						int f = VF[v][i];
+						int _1 = VFi[v][i]; 
+						int _0 = (_1 - 1 + 3) % 3; 
+						int _2 = (_1 + 1) % 3; 
+						Dense_uL(v, F(f, _0)) = 1.; 
+						Dense_uL(v, F(f, _2)) = 1.; 
+					}
+					Dense_uL(v, v) = -(double)nvf;
+				}
+
+				Eigen::SparseMatrix<double> uL = Dense_uL.sparseView();
+
+				Eigen::VectorXd DenseW = Eigen::VectorXd::Ones(V.rows());
+				for(auto pair: param.block_vertices)
+				{
+					DenseW(pair.first) = pair.second * pair.second;
+				}
+				Eigen::SparseMatrix<double> W = DenseW.asDiagonal().toDenseMatrix().sparseView();
+
+				Eigen::SimplicialLLT< Eigen::SparseMatrix<double> > solver(Lt * W * L + param.lambda_regularization * uL.transpose() * uL + param.lambda * BtB);
 				if (solver.info() != Eigen::Success) return;
 
 				Eigen::VectorXd X_vec = Eigen::Map<Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(X.data(), X.size(), 1);
@@ -833,14 +895,9 @@ namespace dgp
 				Eigen::VectorXd b = Eigen::VectorXd::Zero(constraints.size());
 				for (int i = 0; i < constraints.size(); i++)
 				{
-					int vlabel = vertices_label(constraints[i]);
-					remove_bit(vlabel, 0);
-					if(count_bits(vlabel) > 1)
-					{
-						b(i) = adjacent_point_potential;
-					}
+					b(i) = constraints[i].second;
 				}
-				PHI = solver.solve(2. * Lt * l + 2. * Bt * b).eval();
+				PHI = solver.solve(2. * Lt * W * l + 2. * Bt * b).eval();
 				if (solver.info() != Eigen::Success) return;
 				PHI_ready = true;
 			}
@@ -894,14 +951,18 @@ namespace dgp
 				igl::vertex_triangle_adjacency(V_, F_, VF_, VFi_);
 			}
 			
-			void precompute(const std::vector<int>& labels, const PrecomputeParam& param)
+			void precompute(const std::vector<int>& labels, PrecomputeParam& param)
 			{
 				is_border_vertex_ = igl::is_border_vertex(F_);
 				faces_label_ = Eigen::Map<const Eigen::VectorXi>(labels.data(), labels.size());
-				vertices_label_.setZero(V_.rows());
+				vertices_label_.resize(V_.rows(), Eigen::VectorX<bool>::Zero(faces_label_.maxCoeff() + 1));
 				for(int v = 0; v < V_.rows(); ++v)
 				{
-					for (auto f : VF_[v]) vertices_label_(v) |= 1 << faces_label_(f);
+					auto &vextex_label_ = vertices_label_[v];
+					for (auto f : VF_[v]) 
+					{
+						vextex_label_(faces_label_(f)) = true; 
+					}
 				}
 				data_ptrs_.clear();
 				data_ptrs_ = std::vector<std::unique_ptr<SmootherDATA>>(faces_label_.maxCoeff() + 1);
@@ -913,12 +974,12 @@ namespace dgp
 					std::vector<std::vector<int>> label_boundaries;
 					extracting(label, param.fuzzy_kring, data_ptrs_[label]->V, data_ptrs_[label]->F, label_boundaries, data_ptrs_[label]->faces_label, data_ptrs_[label]->vertices_label, data_ptrs_[label]->VJ);
 					data_ptrs_[label]->precompute(param.use_intrinsic);
-					data_ptrs_[label]->precompute(label_boundaries, is_border_vertex_, param.block_kring);
+					data_ptrs_[label]->precompute(param.block_vertices, label_boundaries, is_border_vertex_, param.block_kring);
 					if (data_ptrs_[label]->all_bEdges.empty() || data_ptrs_[label]->all_bVertices.empty()) 
 					{
 						std::cout << "[SmootherImpl::precompute unexpected error: extracting label " << label << "  failed]\n";
 						data_ptrs_[label].reset(nullptr);
-					} 
+					}
 				}
 			}
 			
@@ -945,7 +1006,7 @@ namespace dgp
 				Eigen::MatrixXd& Vo, Eigen::MatrixXi& Fo,
 				std::vector<std::vector<int>>& boundaries,
 				Eigen::VectorXi& faces_label,
-				Eigen::VectorXi& vertices_label,
+				std::vector<Eigen::VectorX<bool>> &vertices_label,
 				Eigen::VectorXi& VJ)
 			{
 				Eigen::VectorXi Ki = faces_label_.unaryExpr([&label](auto fl) { return fl == label ? 1 : 0; });
@@ -987,10 +1048,18 @@ namespace dgp
 				igl::boundary_loop(Fi, boundaries);
 				for(auto &boundary: boundaries)
 				{
-					for(auto &v: boundary) v = Ji(v);
+					for(auto &v: boundary)
+					{
+						v = Ji(v);
+					}
 				}
-
-				vertices_label = Eigen::VectorXi::LinSpaced(Vo.rows(), 0, Vo.rows()).unaryExpr([&](int v) { return vertices_label_(VJ(v)); });
+				
+				vertices_label.clear(); 
+				vertices_label.reserve(Vo.rows());
+				for(Eigen::Index v = 0; v < Vo.rows(); ++v)
+				{
+					vertices_label.emplace_back(vertices_label_[VJ(v)]);
+				}
 				return true;
 			}
 
@@ -1010,7 +1079,7 @@ namespace dgp
 				{
 					if (data_ptrs_[label] == nullptr) continue;
 					auto& data_ptr = data_ptrs_[label];
-					data_ptr->solve_X(param.t, param.preserve_source_normals, param.min_spacing_source_normals);
+					data_ptr->solve_X(param);
 				}
 			}
 
@@ -1020,7 +1089,7 @@ namespace dgp
 				{
 					if (data_ptrs_[label] == nullptr) continue;
 					auto& data_ptr = data_ptrs_[label];
-					data_ptr->solve_PHI(param.lambda, param.adjacent_point_potential, param.min_spacing_constriants);
+					data_ptr->solve_PHI(param);
 				}
 			}
 
@@ -1566,6 +1635,19 @@ namespace dgp
 				}
 			}
 
+			void update_vertices_label()
+			{
+				vertices_label_.resize(V_.rows(), Eigen::VectorX<bool>::Zero(faces_label_.maxCoeff() + 1));
+				for(int v = 0; v < V_.rows(); ++v)
+				{
+					auto &vextex_label_ = vertices_label_[v];
+					for (auto f : VF_[v]) 
+					{
+						vextex_label_(faces_label_(f)) = true; 
+					}
+				}
+			}
+
 			void load(
 				const Eigen::MatrixXd& V,
 				const Eigen::MatrixXi& F,
@@ -1573,19 +1655,10 @@ namespace dgp
 			{
 				V_ = V; 
 				F_ = F; 
-				faces_label_ = faces_label; 
+				faces_label_ = faces_label;
 				is_border_vertex_ = igl::is_border_vertex(F_);
-
 				igl::vertex_triangle_adjacency(V_, F_, VF_, VFi_);
-				//TODO: the int type only gots sizeof(int) * 8 bits
-				vertices_label_.setZero(V_.rows());
-				for(int v = 0; v < V_.rows(); ++v)
-				{
-					for (auto f : VF_[v]) 
-					{
-						vertices_label_(v) |= 1 << faces_label_(f);
-					}
-				}
+				update_vertices_label();
 
 				data_ptrs_.clear();
 				data_ptrs_ = std::vector<std::unique_ptr<SmootherDATA>>(faces_label_.maxCoeff() + 1);
@@ -1599,10 +1672,26 @@ namespace dgp
 				{
 					return false;  
 				}
+				
+				if(data_ptrs_[label] != nullptr)
+				{
+					for(auto v: param.remove_vertices)
+					{
+						for(auto f: VF_[data_ptrs_[label]->VJ(v)])
+						{			
+							if(faces_label_(f) == label)
+							{
+								faces_label_(f) = 0;
+							}
+						}
+					}
+					update_vertices_label();
+				}
 
 				Eigen::MatrixXd V; 
 				Eigen::MatrixXi F;
-				Eigen::VectorXi faces_label, vertices_label, VJ;
+				Eigen::VectorXi faces_label, VJ;
+				std::vector<Eigen::VectorX<bool>> vertices_label;
 				std::vector<std::vector<int>> label_boundaries;
 				if(!extracting(
 					label, 
@@ -1625,7 +1714,7 @@ namespace dgp
 				data_ptrs_[label]->VJ = std::move(VJ);
 				std::cout << "current precompute label(" << label << ") #V(" << data_ptrs_[label]->V.rows() << ") #F(" <<  data_ptrs_[label]->F.rows() << ").\n";
 				data_ptrs_[label]->precompute(param.use_intrinsic);
-				data_ptrs_[label]->precompute(label_boundaries, is_border_vertex_, param.block_kring);
+				data_ptrs_[label]->precompute(param.block_vertices, label_boundaries, is_border_vertex_, param.block_kring);
 				if (data_ptrs_[label]->all_bEdges.empty() || data_ptrs_[label]->all_bVertices.empty()) 
 				{
 					std::cout << "[SmootherImpl::precompute unexpected error: extracting label " << label << "  failed]\n";
@@ -1656,7 +1745,7 @@ namespace dgp
 					return false;  
 				}
 
-				data_ptrs_[label]->solve_X(param.t, param.preserve_source_normals, param.min_spacing_source_normals);
+				data_ptrs_[label]->solve_X(param);
 				return data_ptrs_[label]->X_ready;
 			}
 
@@ -1669,7 +1758,7 @@ namespace dgp
 					return false;  
 				}
 
-				data_ptrs_[label]->solve_PHI(param.lambda, param.adjacent_point_potential, param.min_spacing_constriants);
+				data_ptrs_[label]->solve_PHI(param);
 				return data_ptrs_[label]->PHI_ready; 
 			}
 
@@ -1677,7 +1766,7 @@ namespace dgp
 			Eigen::MatrixXd V_;
 			Eigen::MatrixXi F_;
 			Eigen::VectorXi faces_label_;
-			Eigen::VectorXi vertices_label_;
+			std::vector<Eigen::VectorX<bool>> vertices_label_;
 			std::vector<bool> is_border_vertex_;
 			std::vector<std::vector<int>> VF_, VFi_;
 			std::vector<std::unique_ptr<SmootherDATA>> data_ptrs_;
@@ -1691,7 +1780,7 @@ namespace dgp
 			const std::vector<double>& vbuffer,
 			const std::vector<int>& fbuffer,
 			const std::vector<int>& faces_label,
-			const PrecomputeParam& param)
+			PrecomputeParam& param)
 		{
 			assert(vbuffer.size() % 3 == 0);
 			assert(fbuffer.size() % 3 == 0);
@@ -1705,7 +1794,7 @@ namespace dgp
 			const Eigen::MatrixXd &V, 
 			const Eigen::MatrixXi &F, 
 			const Eigen::VectorXi &faces_label,
-			const PrecomputeParam &param)
+			PrecomputeParam &param)
 		{
 
 			std::vector<double> vbuffer(V.size());
