@@ -101,7 +101,6 @@ int main(int argc, char **argv)
                 diff_param.block_vertices.clear();
                 diff_param.potential_vertices.clear();
                 smoother.load(inputV, inputF, Eigen::Map<Eigen::VectorXi>(vLabel.data(), vLabel.size()).eval());
-                return true; 
             }
             ImGui::End();
             window_current_height += window_size_y; 
@@ -125,19 +124,16 @@ int main(int argc, char **argv)
                 S.setZero(V.rows());
                 tree.init(V, F);
                 prec_param.remove_vertices.clear();
-                return true; 
             }
             if(ImGui::Button("save remove vertices"))
             {
                 prec_param.remove_vertices = selected_indices; 
                 std::cout << "selected " << prec_param.remove_vertices.size() << " remove vertices\n";
-                return true; 
             }
             if(ImGui::Button("save block vertices"))
             {
                 prec_param.block_vertices = selected_indices; 
                 std::cout << "selected " << prec_param.block_vertices.size() << " block vertices\n";
-                return true; 
             }
             ImGui::End();
             window_current_height += window_size_y; 
@@ -156,7 +152,7 @@ int main(int argc, char **argv)
             ImGui::InputDouble("consistency ratio", &sdf_param.consistency_ratio, 0, 0, "%.4f");
             if(ImGui::Button("sdf solve"))
             {
-                return smoother.sdf_solve(std::stoi(vsLabel[iLabel]), sdf_param);
+                smoother.sdf_solve(std::stoi(vsLabel[iLabel]), sdf_param); 
             }
             ImGui::End();
             window_current_height += window_size_y; 
@@ -174,13 +170,12 @@ int main(int argc, char **argv)
             ImGui::InputDouble("line length", &line_length, 0, 0, "%.4f");
             if(ImGui::Button("vector solve"))
             {
-                return smoother.vector_field_solve(std::stoi(vsLabel[iLabel]), vt_param);
+                smoother.vector_field_solve(std::stoi(vsLabel[iLabel]), vt_param); 
             }
             if(ImGui::Button("save block vertices"))
             {
                 vt_param.block_vertices = selected_indices; 
                 std::cout << "vt_param: select " << vt_param.block_vertices.size() << " as block vertices\n";
-                return true;    
             }
             ImGui::End();
             window_current_height += window_size_y; 
@@ -198,7 +193,7 @@ int main(int argc, char **argv)
             ImGui::InputDouble("phi", &phi);
             if(ImGui::Button("phi solve"))
             {
-                return smoother.scalar_field_solve(std::stoi(vsLabel[iLabel]), diff_param);
+                smoother.scalar_field_solve(std::stoi(vsLabel[iLabel]), diff_param); 
             }
             if(ImGui::Button("save block vertices"))
             {
@@ -209,7 +204,6 @@ int main(int argc, char **argv)
                     diff_param.block_vertices.emplace_back(std::make_pair(selected_index, weight));
                 }
                 std::cout << "diff_param: select " << diff_param.block_vertices.size() << " as block vertices\n";
-                return true;    
             }
             ImGui::InputDouble("weight", &weight);
             ImGui::InputDouble("lambda regularization", &diff_param.lambda_regularization, 0, 0, "%.4f");
@@ -223,13 +217,10 @@ int main(int argc, char **argv)
                     diff_param.potential_vertices.emplace_back(std::make_pair(selected_index, potential));
                 }
                 std::cout << "select " << diff_param.potential_vertices.size() << " as potential vertices\n";
-                return true;    
             }
             ImGui::End();
             window_current_height += window_size_y; 
         }
-
-        return true;
     };
 
     widget.callback = [&]()
